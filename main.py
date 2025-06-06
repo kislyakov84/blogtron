@@ -1,13 +1,16 @@
 # main.py
-from fastapi import FastAPI, HTTPException, status # <-- Добавляем HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Depends # <-- Добавляем Depends
+from fastapi.security import OAuth2PasswordRequestForm # <-- Добавляем для логина
 from app.database import database, create_db_tables
 from app.models import posts
-from app.schemas import PostCreate, PostUpdate, PostResponse # <-- Добавляем схемы
-from app.crud import create_post, get_all_posts, get_post, update_post, delete_post # <-- Добавляем CRUD функции
+from app.schemas import PostCreate, PostUpdate, PostResponse
+from app.crud import create_post, get_all_posts, get_post, update_post, delete_post
+from app.auth import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, Token, get_current_active_user # <-- Добавляем из auth.py
 import os
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from typing import List
+from datetime import timedelta # <-- Добавляем для расчета срока жизни токена
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -34,29 +37,56 @@ async def read_root():
 
 # --- API Эндпоинты для постов ---
 
-@app.post("/posts/", response_model=PostResponse, status_code=status.HTTP_201_CREATED, summary="Создать новый пост")
-async def create_new_post(post: PostCreate):
+@app.post("/token", response_model=Token, summary="Получить JWT токен")
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    Аутентифицирует пользователя и выдает Access Token.
+    Используйте 'admin'/'securepassword' для входа.
+    """
+    user = await authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверное имя пользователя или пароль",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# --- API Эндпоинты для постов ---
+
+# Теперь добавляем зависимость current_user: User = Depends(get_current_active_user)
+# к эндпоинтам, которые требуют авторизации.
+# Для GET-эндпоинтов /posts/ и /posts/{post_id} авторизация не нужна (по ТЗ).
+# Но для POST, PUT, DELETE - нужна!
+
+@app.post("/posts/", response_model=PostResponse, status_code=status.HTTP_201_CREATED, summary="Создать новый пост (требуется аутентификация)")
+async def create_new_post(post: PostCreate, current_user: dict = Depends(get_current_active_user)): # <-- Добавляем зависимость
     """
     Создает новый пост в блоге.
     - **title**: Заголовок поста (обязательно)
     - **text**: Текст поста (обязательно)
     """
+    # current_user содержит информацию об аутентифицированном пользователе,
+    # но для тестового задания мы её не используем, просто факт авторизации.
     post_id = await create_post(post)
-    # После создания, получаем полный объект поста из БД для ответа
     created_post = await get_post(post_id)
-    if not created_post: # На случай, если пост не нашелся после создания (маловероятно)
+    if not created_post:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve created post.")
     return created_post
 
 @app.get("/posts/", response_model=List[PostResponse], summary="Получить все посты")
-async def read_all_posts():
+async def read_all_posts(): # <-- Нет зависимости, доступно без авторизации
     """
     Возвращает список всех существующих постов, отсортированных по дате создания.
     """
     return await get_all_posts()
 
 @app.get("/posts/{post_id}", response_model=PostResponse, summary="Получить пост по ID")
-async def read_post_by_id(post_id: int):
+async def read_post_by_id(post_id: int): # <-- Нет зависимости, доступно без авторизации
     """
     Возвращает пост по его уникальному идентификатору.
     - **post_id**: ID поста
@@ -66,8 +96,8 @@ async def read_post_by_id(post_id: int):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
     return post
 
-@app.put("/posts/{post_id}", response_model=PostResponse, summary="Обновить существующий пост")
-async def update_existing_post(post_id: int, post: PostUpdate):
+@app.put("/posts/{post_id}", response_model=PostResponse, summary="Обновить существующий пост (требуется аутентификация)")
+async def update_existing_post(post_id: int, post: PostUpdate, current_user: dict = Depends(get_current_active_user)): # <-- Добавляем зависимость
     """
     Обновляет заголовок и/или текст существующего поста.
     - **post_id**: ID поста, который нужно обновить
@@ -79,25 +109,16 @@ async def update_existing_post(post_id: int, post: PostUpdate):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
     updated_successfully = await update_post(post_id, post)
-    if not updated_successfully:
-        # Если update_post вернул False, это значит, что никаких изменений не было,
-        # или что-то пошло не так, но пост существует.
-        # Можно вернуть текущий пост или 304 Not Modified, если запрос был без изменений
-        # Для простоты, если изменения не были применены (например, пустой update_data),
-        # мы просто вернем текущий пост.
-        # Если же post_id не найден, это уже обработано выше.
-        pass # Пропускаем, так как HTTPException уже был бы выброшен
 
-    # Получаем обновленный пост для возврата в ответе
     updated_post = await get_post(post_id)
-    if not updated_post: # Крайне маловероятно после успешного обновления
+    if not updated_post:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated post.")
 
     return updated_post
 
 
-@app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Удалить пост")
-async def delete_existing_post(post_id: int):
+@app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Удалить пост (требуется аутентификация)")
+async def delete_existing_post(post_id: int, current_user: dict = Depends(get_current_active_user)): # <-- Добавляем зависимость
     """
     Удаляет пост по его уникальному идентификатору.
     - **post_id**: ID поста, который нужно удалить
@@ -105,7 +126,7 @@ async def delete_existing_post(post_id: int):
     deleted_successfully = await delete_post(post_id)
     if not deleted_successfully:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
-    return # HTTP 204 No Content означает, что нет тела ответа
+    return
 
 if __name__ == "__main__":
     import uvicorn
