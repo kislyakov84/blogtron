@@ -6,8 +6,7 @@ from datetime import datetime
 import httpx
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
-                          ContextTypes)
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 # Загружаем переменные окружения
 load_dotenv()
