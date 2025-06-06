@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python/
+env/
+venv/
+.venv/ # Это важно, чтобы не добавлять виртуальное окружение в Git
+*egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# IDEs
+.vscode/ # Можно добавить, если не хотите делиться настройками VS Code
+.idea/
+
+# Environment variables
+.env # Это важно, чтобы не добавлять реальные секреты в Git
