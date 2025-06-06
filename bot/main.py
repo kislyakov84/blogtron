@@ -1,19 +1,20 @@
 # bot/main.py
-import os
 import logging
-from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import httpx
+import os
 from datetime import datetime
+
+import httpx
+from dotenv import load_dotenv
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
+                          ContextTypes)
 
 # Загружаем переменные окружения
 load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -30,13 +31,16 @@ API_BASE_URL = "http://localhost:8000"
 # Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение при команде /start."""
-    assert update.message is not None # <-- ДОБАВЛЕНО
-    await update.message.reply_text('Привет! Я бот для показа постов из блога. Используй команду /posts, чтобы увидеть список.')
+    assert update.message is not None  # <-- ДОБАВЛЕНО
+    await update.message.reply_text(
+        "Привет! Я бот для показа постов из блога. Используй команду /posts, чтобы увидеть список."
+    )
+
 
 # Обработчик команды /posts
 async def show_posts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает кнопки с заголовками постов."""
-    assert update.message is not None # <-- ДОБАВЛЕНО
+    assert update.message is not None  # <-- ДОБАВЛЕНО
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{API_BASE_URL}/posts/")
@@ -44,39 +48,56 @@ async def show_posts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             posts_data = response.json()
 
         if not posts_data:
-            await update.message.reply_text("Постов пока нет. Добавьте их через API-админку!")
+            await update.message.reply_text(
+                "Постов пока нет. Добавьте их через API-админку!"
+            )
             return
 
         keyboard = []
         for post in posts_data:
-            keyboard.append([InlineKeyboardButton(post["title"], callback_data=f"post_{post['id']}")])
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        post["title"], callback_data=f"post_{post['id']}"
+                    )
+                ]
+            )
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text('Выберите пост:', reply_markup=reply_markup)
+        await update.message.reply_text("Выберите пост:", reply_markup=reply_markup)
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP error fetching posts: {e.response.status_code} - {e.response.text}")
-        await update.message.reply_text(f"Произошла ошибка при получении постов: HTTP {e.response.status_code}. Пожалуйста, попробуйте позже.")
+        logger.error(
+            f"HTTP error fetching posts: {e.response.status_code} - {e.response.text}"
+        )
+        await update.message.reply_text(
+            f"Произошла ошибка при получении постов: HTTP {e.response.status_code}. Пожалуйста, попробуйте позже."
+        )
     except httpx.RequestError as e:
         logger.error(f"Network error fetching posts: {e}")
-        await update.message.reply_text("Не удалось подключиться к серверу API. Пожалуйста, проверьте его работу.")
+        await update.message.reply_text(
+            "Не удалось подключиться к серверу API. Пожалуйста, проверьте его работу."
+        )
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}", exc_info=True)
-        await update.message.reply_text("Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже.")
+        await update.message.reply_text(
+            "Произошла непредвиденная ошибка. Пожалуйста, попробуйте позже."
+        )
+
 
 # Обработчик нажатия на кнопку (callback query)
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает детали поста при нажатии на кнопку."""
     assert update.callback_query is not None
     query = update.callback_query
-    assert query.data is not None # <-- ДОБАВЛЕНО: последнее утверждение для Pylance
+    assert query.data is not None  # <-- ДОБАВЛЕНО: последнее утверждение для Pylance
     await query.answer()
 
     # Разбираем callback_data: "post_ID"
-    callback_data_parts = query.data.split('_') # <-- Теперь Pylance точно не ругается!
+    callback_data_parts = query.data.split("_")  # <-- Теперь Pylance точно не ругается!
     if len(callback_data_parts) == 2 and callback_data_parts[0] == "post":
         post_id = int(callback_data_parts[1])
-        
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(f"{API_BASE_URL}/posts/{post_id}")
@@ -93,19 +114,27 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"<i>Дата создания: {formatted_date}</i>"
             )
             await query.edit_message_text(message_text, parse_mode="HTML")
-        
+
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 await query.edit_message_text("Пост не найден или был удален.")
             else:
-                logger.error(f"HTTP error fetching post details: {e.response.status_code} - {e.response.text}")
-                await query.edit_message_text(f"Ошибка при получении деталей поста: HTTP {e.response.status_code}.")
+                logger.error(
+                    f"HTTP error fetching post details: {e.response.status_code} - {e.response.text}"
+                )
+                await query.edit_message_text(
+                    f"Ошибка при получении деталей поста: HTTP {e.response.status_code}."
+                )
         except httpx.RequestError as e:
             logger.error(f"Network error fetching post details: {e}")
-            await query.edit_message_text("Не удалось подключиться к серверу API для получения деталей поста.")
+            await query.edit_message_text(
+                "Не удалось подключиться к серверу API для получения деталей поста."
+            )
         except Exception as e:
             logger.error(f"An unexpected error occurred: {e}", exc_info=True)
-            await query.edit_message_text("Произошла непредвиденная ошибка при показе поста.")
+            await query.edit_message_text(
+                "Произошла непредвиденная ошибка при показе поста."
+            )
     else:
         await query.edit_message_text("Неизвестный запрос.")
 
@@ -122,11 +151,14 @@ def main() -> None:
     # Регистрируем обработчики команд и колбеков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("posts", show_posts))
-    application.add_handler(CallbackQueryHandler(button_callback, pattern=r'^post_\d+$')) # Обработка кнопок типа "post_ID"
+    application.add_handler(
+        CallbackQueryHandler(button_callback, pattern=r"^post_\d+$")
+    )  # Обработка кнопок типа "post_ID"
 
     logger.info("Бот запущен. Ожидание обновлений...")
     print("Бот запущен. Отправьте /start или /posts в Telegram.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()

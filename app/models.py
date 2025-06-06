@@ -1,7 +1,9 @@
 # app/models.py
-from sqlalchemy import Table, Column, Integer, String, DateTime
-from app.database import metadata # Импортируем metadata из database.py
 import datetime
+
+from sqlalchemy import Column, DateTime, Integer, String, Table
+
+from app.database import metadata  # Импортируем metadata из database.py
 
 # Определение таблицы Post
 posts = Table(
