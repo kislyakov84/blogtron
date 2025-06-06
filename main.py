@@ -3,18 +3,39 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import List
 
-# import os # <-- УДАЛЕНО: Этот импорт больше не нужен здесь
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    status,
+    Request,
+)  # <-- ДОБАВЛЕНО Request
 from fastapi.security import OAuth2PasswordRequestForm
 
-from app.auth import (ACCESS_TOKEN_EXPIRE_MINUTES, Token, authenticate_user,
-                      create_access_token, get_current_active_user)
-from app.crud import (create_post, delete_post, get_all_posts, get_post,
-                      update_post)
+from app.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    Token,
+    authenticate_user,
+    create_access_token,
+    get_current_active_user,
+    User,
+)  # <-- Убедитесь, что User импортирован
+from app.crud import create_post, delete_post, get_all_posts, get_post, update_post
 from app.database import create_db_tables, database
-# from app.models import posts # <-- УДАЛЕНО: Этот импорт больше не нужен здесь
 from app.schemas import PostCreate, PostResponse, PostUpdate
+
+# Для обработки ошибок валидации и общих ошибок
+from fastapi.exceptions import RequestValidationError  # <-- ДОБАВЛЕНО
+from fastapi.responses import JSONResponse  # <-- ДОБАВЛЕНО
+import logging  # <-- ДОБАВЛЕНО для логирования ошибок
+
+# Настройка логирования для main.py (полезно для отладки)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -22,11 +43,11 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Starting up...")
+    logger.info("Starting up...")  # <-- Изменено на logger.info
     create_db_tables()
     await database.connect()
     yield
-    print("Shutting down...")
+    logger.info("Shutting down...")  # <-- Изменено на logger.info
     await database.disconnect()
 
 
@@ -37,8 +58,54 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# --- ГЛОБАЛЬНЫЕ ОБРАБОТЧИКИ ОШИБОК ---
 
-@app.get("/")
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    Обработчик ошибок валидации входных данных (например, Pydantic).
+    Возвращает 422 Unprocessable Entity с деталями ошибки.
+    """
+    logger.error(f"Validation error: {exc.errors()} for URL: {request.url}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors(), "message": "Некорректные входные данные"},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Обработчик HTTPException, который мы сами выбрасываем.
+    Возвращает заданный статус и детали.
+    """
+    logger.warning(
+        f"HTTP exception: {exc.status_code} - {exc.detail} for URL: {request.url}"
+    )
+    return JSONResponse(status_code=exc.status_code, content={"message": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """
+    Общий обработчик для всех непредвиденных исключений.
+    Возвращает 500 Internal Server Error.
+    """
+    logger.exception(
+        f"Unhandled exception at URL: {request.url}"
+    )  # Логируем полную трассировку
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "message": "Произошла непредвиденная ошибка на сервере. Пожалуйста, попробуйте позже."
+        },
+    )
+
+
+@app.get(
+    "/", include_in_schema=False
+)  # Скрываем этот эндпоинт из документации, он не является частью API
 async def read_root():
     return {"message": "Welcome to the Telegram Blog Bot API!"}
 
@@ -70,7 +137,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     summary="Создать новый пост (требуется аутентификация)",
 )
 async def create_new_post(
-    post: PostCreate, current_user: dict = Depends(get_current_active_user)
+    post: PostCreate, current_user: User = Depends(get_current_active_user)
 ):
     """
     Создает новый пост в блоге.
@@ -117,7 +184,7 @@ async def read_post_by_id(post_id: int):
 async def update_existing_post(
     post_id: int,
     post: PostUpdate,
-    current_user: dict = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Обновляет заголовок и/или текст существующего поста.
@@ -131,29 +198,16 @@ async def update_existing_post(
             status_code=status.HTTP_404_NOT_FOUND, detail="Post not found"
         )
 
-    # Эту строку нужно ВЕРНУТЬ! Она выполняет обновление.
-    updated_successfully = await update_post(post_id, post)  # <-- ВЕРНУТО!
-
-    # Мы могли бы проверить updated_successfully, но для простоты и
-    # чтобы получить свежие данные, мы всегда запрашиваем пост после обновления.
-    # Если update_post вернул False, это значит, что никаких изменений не было,
-    # или что-то пошло не так (но пост найден). В этом случае мы просто
-    # вернем текущий пост.
+    updated_successfully = await update_post(post_id, post)
     if not updated_successfully:
-        # Если обновление не произошло (например, все поля в post: PostUpdate были None),
-        # то возвращаем текущий пост, так как он не изменился.
         return existing_post  # Возвращаем существующий пост, если не было изменений
 
-    # А теперь получаем обновленный пост из БД для возврата в ответе
     updated_post = await get_post(post_id)
     if not updated_post:
-        # Этот случай крайне маловероятен, если обновление прошло успешно,
-        # но пост вдруг "пропал" из БД после обновления.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve updated post after update.",
         )
-
     return updated_post
 
 
@@ -163,7 +217,7 @@ async def update_existing_post(
     summary="Удалить пост (требуется аутентификация)",
 )
 async def delete_existing_post(
-    post_id: int, current_user: dict = Depends(get_current_active_user)
+    post_id: int, current_user: User = Depends(get_current_active_user)
 ):
     """
     Удаляет пост по его уникальному идентификатору.
