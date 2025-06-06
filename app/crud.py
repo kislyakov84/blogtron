@@ -2,7 +2,8 @@
 from app.database import database
 from app.models import posts
 from app.schemas import PostCreate, PostUpdate
-from typing import List, Optional
+from typing import List, Optional # <-- ИЗМЕНЕНО: удалены Dict, Any
+from databases.interfaces import Record # <-- ИЗМЕНЕНО: импортируем Record из interfaces
 import datetime
 
 # Create (Создание поста)
@@ -15,28 +16,27 @@ async def create_post(post: PostCreate) -> int:
     return await database.execute(query)
 
 # Read (Получение всех постов)
-async def get_all_posts() -> List[dict]:
-    query = posts.select().order_by(posts.c.created_at.desc()) # Сортировка по убыванию даты создания
+async def get_all_posts() -> List[Record]:
+    query = posts.select().order_by(posts.c.created_at.desc())
     return await database.fetch_all(query)
 
 # Read (Получение поста по ID)
-async def get_post(post_id: int) -> Optional[dict]:
+async def get_post(post_id: int) -> Optional[Record]:
     query = posts.select().where(posts.c.id == post_id)
     return await database.fetch_one(query)
 
 # Update (Обновление поста)
 async def update_post(post_id: int, post: PostUpdate) -> bool:
-    # Создаем словарь только с теми полями, которые не None (были переданы)
-    update_data = {k: v for k, v in post.model_dump(exclude_unset=True).items()} # model_dump для Pydantic v2+
+    update_data = {k: v for k, v in post.model_dump(exclude_unset=True).items()}
     if not update_data:
-        return False # Ничего обновлять не нужно
+        return False
 
     query = posts.update().where(posts.c.id == post_id).values(**update_data)
     result = await database.execute(query)
-    return result > 0 # Возвращаем True, если пост был обновлен (т.е. был найден и изменен)
+    return result > 0
 
 # Delete (Удаление поста)
 async def delete_post(post_id: int) -> bool:
     query = posts.delete().where(posts.c.id == post_id)
     result = await database.execute(query)
-    return result > 0 # Возвращаем True, если пост был удален
+    return result > 0

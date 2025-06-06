@@ -1,16 +1,16 @@
 # main.py
-from fastapi import FastAPI, HTTPException, status, Depends # <-- Добавляем Depends
-from fastapi.security import OAuth2PasswordRequestForm # <-- Добавляем для логина
+from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi.security import OAuth2PasswordRequestForm
 from app.database import database, create_db_tables
-from app.models import posts
+# from app.models import posts # <-- УДАЛЕНО: Этот импорт больше не нужен здесь
 from app.schemas import PostCreate, PostUpdate, PostResponse
 from app.crud import create_post, get_all_posts, get_post, update_post, delete_post
-from app.auth import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, Token, get_current_active_user # <-- Добавляем из auth.py
-import os
+from app.auth import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES, Token, get_current_active_user
+# import os # <-- УДАЛЕНО: Этот импорт больше не нужен здесь
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from typing import List
-from datetime import timedelta # <-- Добавляем для расчета срока жизни токена
+from datetime import timedelta
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -35,8 +35,6 @@ app = FastAPI(
 async def read_root():
     return {"message": "Welcome to the Telegram Blog Bot API!"}
 
-# --- API Эндпоинты для постов ---
-
 @app.post("/token", response_model=Token, summary="Получить JWT токен")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     """
@@ -56,22 +54,13 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-# --- API Эндпоинты для постов ---
-
-# Теперь добавляем зависимость current_user: User = Depends(get_current_active_user)
-# к эндпоинтам, которые требуют авторизации.
-# Для GET-эндпоинтов /posts/ и /posts/{post_id} авторизация не нужна (по ТЗ).
-# Но для POST, PUT, DELETE - нужна!
-
 @app.post("/posts/", response_model=PostResponse, status_code=status.HTTP_201_CREATED, summary="Создать новый пост (требуется аутентификация)")
-async def create_new_post(post: PostCreate, current_user: dict = Depends(get_current_active_user)): # <-- Добавляем зависимость
+async def create_new_post(post: PostCreate, current_user: dict = Depends(get_current_active_user)):
     """
     Создает новый пост в блоге.
     - **title**: Заголовок поста (обязательно)
     - **text**: Текст поста (обязательно)
     """
-    # current_user содержит информацию об аутентифицированном пользователе,
-    # но для тестового задания мы её не используем, просто факт авторизации.
     post_id = await create_post(post)
     created_post = await get_post(post_id)
     if not created_post:
@@ -79,14 +68,14 @@ async def create_new_post(post: PostCreate, current_user: dict = Depends(get_cur
     return created_post
 
 @app.get("/posts/", response_model=List[PostResponse], summary="Получить все посты")
-async def read_all_posts(): # <-- Нет зависимости, доступно без авторизации
+async def read_all_posts():
     """
     Возвращает список всех существующих постов, отсортированных по дате создания.
     """
     return await get_all_posts()
 
 @app.get("/posts/{post_id}", response_model=PostResponse, summary="Получить пост по ID")
-async def read_post_by_id(post_id: int): # <-- Нет зависимости, доступно без авторизации
+async def read_post_by_id(post_id: int):
     """
     Возвращает пост по его уникальному идентификатору.
     - **post_id**: ID поста
@@ -97,7 +86,7 @@ async def read_post_by_id(post_id: int): # <-- Нет зависимости, д
     return post
 
 @app.put("/posts/{post_id}", response_model=PostResponse, summary="Обновить существующий пост (требуется аутентификация)")
-async def update_existing_post(post_id: int, post: PostUpdate, current_user: dict = Depends(get_current_active_user)): # <-- Добавляем зависимость
+async def update_existing_post(post_id: int, post: PostUpdate, current_user: dict = Depends(get_current_active_user)):
     """
     Обновляет заголовок и/или текст существующего поста.
     - **post_id**: ID поста, который нужно обновить
@@ -108,17 +97,30 @@ async def update_existing_post(post_id: int, post: PostUpdate, current_user: dic
     if not existing_post:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
-    updated_successfully = await update_post(post_id, post)
+    # Эту строку нужно ВЕРНУТЬ! Она выполняет обновление.
+    updated_successfully = await update_post(post_id, post) # <-- ВЕРНУТО!
 
+    # Мы могли бы проверить updated_successfully, но для простоты и
+    # чтобы получить свежие данные, мы всегда запрашиваем пост после обновления.
+    # Если update_post вернул False, это значит, что никаких изменений не было,
+    # или что-то пошло не так (но пост найден). В этом случае мы просто
+    # вернем текущий пост.
+    if not updated_successfully:
+        # Если обновление не произошло (например, все поля в post: PostUpdate были None),
+        # то возвращаем текущий пост, так как он не изменился.
+        return existing_post # Возвращаем существующий пост, если не было изменений
+
+    # А теперь получаем обновленный пост из БД для возврата в ответе
     updated_post = await get_post(post_id)
     if not updated_post:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated post.")
+        # Этот случай крайне маловероятен, если обновление прошло успешно,
+        # но пост вдруг "пропал" из БД после обновления.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve updated post after update.")
 
     return updated_post
 
-
 @app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Удалить пост (требуется аутентификация)")
-async def delete_existing_post(post_id: int, current_user: dict = Depends(get_current_active_user)): # <-- Добавляем зависимость
+async def delete_existing_post(post_id: int, current_user: dict = Depends(get_current_active_user)):
     """
     Удаляет пост по его уникальному идентификатору.
     - **post_id**: ID поста, который нужно удалить

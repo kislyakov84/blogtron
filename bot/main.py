@@ -4,7 +4,7 @@ import logging
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-import httpx # Для асинхронных HTTP-запросов к нашему FastAPI API
+import httpx
 from datetime import datetime
 
 # Загружаем переменные окружения
@@ -30,15 +30,17 @@ API_BASE_URL = "http://localhost:8000"
 # Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет приветственное сообщение при команде /start."""
+    assert update.message is not None # <-- ДОБАВЛЕНО
     await update.message.reply_text('Привет! Я бот для показа постов из блога. Используй команду /posts, чтобы увидеть список.')
 
 # Обработчик команды /posts
 async def show_posts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает кнопки с заголовками постов."""
+    assert update.message is not None # <-- ДОБАВЛЕНО
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{API_BASE_URL}/posts/")
-            response.raise_for_status() # Выбросит исключение для HTTP ошибок 4xx/5xx
+            response.raise_for_status()
             posts_data = response.json()
 
         if not posts_data:
@@ -47,7 +49,6 @@ async def show_posts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         keyboard = []
         for post in posts_data:
-            # Callback data будет в формате "post_ID"
             keyboard.append([InlineKeyboardButton(post["title"], callback_data=f"post_{post['id']}")])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -66,11 +67,13 @@ async def show_posts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 # Обработчик нажатия на кнопку (callback query)
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает детали поста при нажатии на кнопку."""
+    assert update.callback_query is not None
     query = update.callback_query
-    await query.answer() # Обязательно ответить на callback query, иначе кнопка будет "висеть"
+    assert query.data is not None # <-- ДОБАВЛЕНО: последнее утверждение для Pylance
+    await query.answer()
 
     # Разбираем callback_data: "post_ID"
-    callback_data_parts = query.data.split('_')
+    callback_data_parts = query.data.split('_') # <-- Теперь Pylance точно не ругается!
     if len(callback_data_parts) == 2 and callback_data_parts[0] == "post":
         post_id = int(callback_data_parts[1])
         
@@ -82,14 +85,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             # Форматируем дату
             created_at_dt = datetime.fromisoformat(post["created_at"])
-            formatted_date = created_at_dt.strftime("%d.%m.%Y %H:%M") # Пример: 01.01.2023 10:30
+            formatted_date = created_at_dt.strftime("%d.%m.%Y %H:%M")
 
             message_text = (
                 f"<b>{post['title']}</b>\n\n"
                 f"{post['text']}\n\n"
                 f"<i>Дата создания: {formatted_date}</i>"
             )
-            await query.edit_message_text(message_text, parse_mode="HTML") # Используем HTML для форматирования
+            await query.edit_message_text(message_text, parse_mode="HTML")
         
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

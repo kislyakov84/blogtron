@@ -1,7 +1,7 @@
 # app/auth.py
 import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional # Optional здесь все еще нужен для expires_delta
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -14,17 +14,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Конфигурация JWT
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = "HS256" # Алгоритм хеширования для JWT
-ACCESS_TOKEN_EXPIRE_MINUTES = 30 # Время жизни токена в минутах
-
-if not SECRET_KEY:
+_SECRET_KEY = os.getenv("SECRET_KEY")
+if not _SECRET_KEY:
     raise ValueError("SECRET_KEY не установлен в .env файле. Это необходимо для JWT.")
+
+SECRET_KEY: str = _SECRET_KEY
+
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Конфигурация для хеширования паролей
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Схема OAuth2 для получения токена (FastAPI автоматически добавляет в Swagger)
+# Схема OAuth2 для получения токена
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 # --- Pydantic модели для пользователей ---
@@ -39,50 +41,41 @@ class Token(BaseModel):
     token_type: str
 
 class TokenData(BaseModel):
-    username: Optional[str] = None
+    username: str # <-- ИЗМЕНЕНО: теперь просто str
 
 # --- Функции для работы с паролями и JWT ---
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Проверяет соответствие открытого пароля хешированному."""
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
-    """Хеширует пароль."""
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Создает JWT Access Token."""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15) # Дефолтный срок жизни
+        expire = datetime.utcnow() + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 # --- Временная "база данных" пользователей (для простоты тестового) ---
-# В реальном приложении это были бы записи в БД
 FAKE_USERS_DB = {
     "admin": {
         "username": "admin",
-        "hashed_password": get_password_hash("securepassword"), # !!! В реальном приложении хешируйте пароль ОДИН раз при создании пользователя
+        "hashed_password": get_password_hash("securepassword"),
     }
 }
-# Убедитесь, что пароль для 'admin' хешируется только один раз
-# При первом запуске или если вы меняете пароль вручную здесь,
-# убедитесь, что этот хеш генерируется корректно.
 
 async def get_user(username: str) -> Optional[UserInDB]:
-    """Получает пользователя из фейковой БД."""
     if username in FAKE_USERS_DB:
         user_dict = FAKE_USERS_DB[username]
         return UserInDB(**user_dict)
     return None
 
 async def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
-    """Аутентифицирует пользователя по логину и паролю."""
     user = await get_user(username)
     if not user:
         return None
@@ -91,10 +84,6 @@ async def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
     return user
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    """
-    Зависимость FastAPI для получения текущего пользователя из JWT-токена.
-    Вызывает HTTPException 401, если токен невалиден.
-    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -102,19 +91,22 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
+        username = payload.get("sub")
+
         if username is None:
             raise credentials_exception
-        token_data = TokenData(username=username)
+        
+        if not isinstance(username, str): # Это хорошая runtime-проверка
+            raise credentials_exception
+
+        token_data = TokenData(username=username) # Теперь username здесь - str
+        # Pylance теперь увидит, что token_data.username - это str
     except JWTError:
         raise credentials_exception
-    user = await get_user(token_data.username)
+    user = await get_user(token_data.username) # <-- Pylance больше не будет ругаться здесь
     if user is None:
         raise credentials_exception
-    return User(username=user.username) # Возвращаем объект User без хешированного пароля
+    return User(username=user.username)
 
-# Зависимость для получения АКТИВНОГО пользователя
-# (в данном случае "активный" просто означает "аутентифицированный")
 async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
-    """Возвращает текущего аутентифицированного пользователя."""
     return current_user
