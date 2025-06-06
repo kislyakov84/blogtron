@@ -17,3 +17,4 @@ venv/
 
 # Environment variables
 .env # Это важно, чтобы не добавлять реальные секреты в Git
+.env
